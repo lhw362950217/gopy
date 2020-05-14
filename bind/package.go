@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+
+	"go4.org/sort"
 )
 
 // Package ties types.Package and ast.Package together.
@@ -46,6 +48,48 @@ func ResetPackages() {
 	current = newSymtab(nil, universe)
 }
 
+// Print is ok
+func (p *Package) Print() {
+	fmt.Printf("***********pkg:%s***********\n", p.pkg.Name())
+	fmt.Println("-----------objs-----------")
+	for k, v := range p.objs {
+		fmt.Printf("%s = %s\n", k, v.GoName())
+	}
+	fmt.Println("-----------consts-----------")
+	for _, c := range p.consts {
+		fmt.Println(c.GoName())
+	}
+	fmt.Println("-----------vars-----------")
+	for _, v := range p.vars {
+		fmt.Println(v.name)
+	}
+	fmt.Println("-----------structs-----------")
+	for _, v := range p.structs {
+		fmt.Println(v.GoName())
+	}
+	fmt.Println("-----------ifaces-----------")
+	for _, v := range p.ifaces {
+		fmt.Println(v.GoName())
+	}
+	fmt.Println("-----------slices-----------")
+	for _, v := range p.slices {
+		fmt.Println(v.GoName())
+	}
+	fmt.Println("-----------maps-----------")
+	for _, v := range p.maps {
+		fmt.Println(v.GoName())
+	}
+	fmt.Println("-----------funcs-----------")
+	for _, v := range p.funcs {
+		fmt.Println(v.GoName())
+	}
+	fmt.Println("-----------pyimports-----------")
+	for k, v := range p.pyimports {
+		fmt.Printf("%s = %v\n", k, v)
+	}
+	fmt.Println()
+}
+
 // NewPackage creates a new Package, tying types.Package and ast.Package together.
 func NewPackage(pkg *types.Package, doc *doc.Package) (*Package, error) {
 	// protection for parallel tests
@@ -66,6 +110,8 @@ func NewPackage(pkg *types.Package, doc *doc.Package) (*Package, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	p.Print()
 
 	Packages = append(Packages, p)
 	return p, err
@@ -235,6 +281,7 @@ func (p *Package) process() error {
 
 		p.n++
 		p.syms.addSymbol(obj)
+		println("Add symbel:" + name)
 	}
 
 	for _, name := range scope.Names() {
@@ -507,7 +554,80 @@ func (p *Package) Lookup(o types.Object) (Object, bool) {
 	return obj, ok
 }
 
-func (p *Package) sortStructEmbeds() {
+func (p *Package) isStructRef(name string) *Struct {
+	if sb, ok := p.objs[name]; ok {
+		if st, ok := sb.(*Struct); ok {
+			return st
+		}
+	}
+	if name[0] == '*' {
+		return p.isStructRef(name[1:])
+	}
+	return nil
+}
+
+func (p *Package) dependencyAnalysis() {
+	arr := append([]*Struct{}, p.structs...)
+	refcnt := make(map[string]int)
+	dag := make(map[string][]string)
+	for _, s := range p.structs {
+		// println(s.GoName())
+		embed := s.FirstEmbed()
+		// embed ref
+		if embed != nil {
+			if ref := p.isStructRef(embed.goname); ref != nil {
+				refcnt[s.GoName()]++
+				dag[ref.GoName()] = append(dag[ref.GoName()], s.GoName())
+			}
+		}
+		// constructor ref
+		for _, c := range s.ctors {
+			for _, arg := range c.sig.args {
+				if ref := p.isStructRef(arg.sym.goname); ref != nil {
+					refcnt[s.GoName()]++
+					dag[ref.GoName()] = append(dag[ref.GoName()], s.GoName())
+				}
+			}
+		}
+	}
+	//
+	brr := arr
+	for len(brr) > 0 {
+		data := sort.MakeInterface(len(brr), func(i, j int) {
+			brr[i], brr[j] = brr[j], brr[i]
+		}, func(i, j int) bool {
+			return refcnt[brr[i].GoName()] < refcnt[brr[j].GoName()]
+		})
+		sort.Sort(data)
+		if refcnt[brr[0].GoName()] != 0 {
+			panic(fmt.Errorf("cycle dependence"))
+		}
+		curName := brr[0].GoName()
+		brr = brr[1:]
+		for _, to := range dag[curName] {
+			refcnt[to]--
+		}
+	}
+	//
+	println("************ Gen Order ************")
+	sep := ""
+	for _, a := range p.structs {
+		print(sep, a.GoName())
+		sep = "->"
+	}
+	println()
+	sep = ""
+	for _, a := range arr {
+		print(sep, a.GoName())
+		sep = "->"
+	}
+	println("\n*********** Gen Order End ***********")
+	//
+	p.structs = arr
+
+}
+
+func (p *Package) dependencyAnalysis1() {
 	for {
 		nswap := 0
 		for _, s := range p.structs {

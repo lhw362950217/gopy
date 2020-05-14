@@ -574,7 +574,11 @@ func (g *pyGen) genPkgWrapOut() {
 	impstr := ""
 	for _, im := range g.pkg.pyimports {
 		if g.mode == ModeGen || g.mode == ModeBuild {
-			impstr += fmt.Sprintf("import %s\n", im)
+			if g.lang == 2 {
+				impstr += fmt.Sprintf("import %s\n", im)
+			} else {
+				impstr += fmt.Sprintf("from . import %s\n", im)
+			}
 		} else {
 			impstr += fmt.Sprintf("from %s import %s\n", g.outname, im)
 		}
@@ -660,7 +664,11 @@ func (g *pyGen) genPyWrapPreamble() {
 	case g.pkg.Name() == "go":
 		impstr += fmt.Sprintf(GoPkgDefs, g.outname)
 	case g.mode == ModeGen || g.mode == ModeBuild:
-		impstr += fmt.Sprintf("import go\n")
+		if g.lang == 2 {
+			impstr += fmt.Sprintf("import go\n")
+		} else {
+			impstr += fmt.Sprintf("from . import go\n")
+		}
 	default:
 		impstr += fmt.Sprintf("from %s import go\n", g.outname)
 	}
@@ -776,7 +784,7 @@ func (g *pyGen) genAll() {
 
 	g.gofile.Printf("\n\n// ---- Structs ---\n")
 	g.pywrap.Printf("\n\n# ---- Structs ---\n")
-	g.pkg.sortStructEmbeds()
+	g.pkg.dependencyAnalysis()
 	for _, s := range g.pkg.structs {
 		g.genStruct(s)
 	}
