@@ -312,7 +312,9 @@ build:
 	# goimports is needed to ensure that the imports list is valid
 	$(GOIMPORTS) -w %[1]s.go
 	# generate %[1]s_go$(LIBEXT) from %[1]s.go -- the cgo wrappers to go functions
-	$(GOBUILD) -buildmode=c-shared -o %[1]s_go$(LIBEXT) %[1]s.go
+	# $(GOBUILD) -buildmode=c-shared -o %[1]s_go$(LIBEXT) %[1]s.go
+	# we use static linked lib
+	$(GOBUILD) -buildmode=c-archive -o %[1]s_go.a %[1]s.go
 	# use pybindgen to build the %[1]s.c file which are the CPython wrappers to cgo wrappers..
 	# note: pip install pybindgen to get pybindgen if this fails
 	$(PYTHON) build.py
@@ -320,7 +322,9 @@ build:
 	go run patch-leaks.go %[1]s.c
 	# build the _%[1]s$(LIBEXT) library that contains the cgo and CPython wrappers
 	# generated %[1]s.py python wrapper imports this c-code package
-	$(GCC) %[1]s.c %[6]s %[1]s_go$(LIBEXT) -o _%[1]s$(LIBEXT) $(CFLAGS) $(LDFLAGS) -fPIC --shared -w
+	# $(GCC) %[1]s.c %[6]s %[1]s_go$(LIBEXT) -o _%[1]s$(LIBEXT) $(CFLAGS) $(LDFLAGS) -fPIC --shared -w
+	$(GCC) %[1]s.c %[6]s %[1]s_go.a -o _%[1]s$(LIBEXT) $(CFLAGS) $(LDFLAGS) $(EXTRA_FLAGS) -fPIC --shared -w
+	rm %[1]s_go.a 
 	
 `
 

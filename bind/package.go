@@ -111,7 +111,7 @@ func NewPackage(pkg *types.Package, doc *doc.Package) (*Package, error) {
 		return nil, err
 	}
 
-	p.Print()
+	//p.Print()
 
 	Packages = append(Packages, p)
 	return p, err
@@ -281,7 +281,7 @@ func (p *Package) process() error {
 
 		p.n++
 		p.syms.addSymbol(obj)
-		println("Add symbel:" + name)
+		// println("Add symbel:" + name)
 	}
 
 	for _, name := range scope.Names() {
@@ -608,21 +608,21 @@ func (p *Package) dependencyAnalysis() {
 			refcnt[to]--
 		}
 	}
-	//
-	println("************ Gen Order ************")
-	sep := ""
-	for _, a := range p.structs {
-		print(sep, a.GoName())
-		sep = "->"
-	}
-	println()
-	sep = ""
-	for _, a := range arr {
-		print(sep, a.GoName())
-		sep = "->"
-	}
-	println("\n*********** Gen Order End ***********")
-	//
+	/*
+		println("************ Gen Order ************")
+		sep := ""
+		for _, a := range p.structs {
+			print(sep, a.GoName())
+			sep = "->"
+		}
+		println()
+		sep = ""
+		for _, a := range arr {
+			print(sep, a.GoName())
+			sep = "->"
+		}
+		println("\n*********** Gen Order End ***********")
+	*/
 	p.structs = arr
 
 }
