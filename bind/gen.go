@@ -49,6 +49,7 @@ package main
 %[3]s
 // #define Py_LIMITED_API // need full API for PyRun*
 #include <Python.h>
+#include <datetime.h>
 typedef uint8_t bool;
 // static inline is trick for avoiding need for extra .c file
 // the following are used for build value -- switch on reflect.Kind
@@ -82,6 +83,23 @@ static inline void gopy_err_handle() {
 		PyErr_Print();
 	}
 }
+static inline void init_PyDateTime() {
+  PyDateTime_IMPORT;
+}
+static inline PyObject* GetPyDateTime(int year, int month, int day,
+	int hour, int minute, int second, int us) {
+	return PyDateTime_FromDateAndTime(year, month, day, hour, minute, second, us);
+}
+static inline PyObject* ReturnNone() {
+	Py_RETURN_NONE;
+}
+static inline PyObject* ReturnBool(int val) {
+	if (val) {
+		Py_RETURN_TRUE;
+	} else {
+		Py_RETURN_FALSE;
+	}
+}
 %[8]s
 */
 import "C"
@@ -101,6 +119,7 @@ func main() {
 
 //export GoPyInit
 func GoPyInit() {
+	C.init_PyDateTime()
 	%[7]s
 }
 
@@ -161,6 +180,65 @@ func complex128PyToGo(o *C.PyObject) complex128 {
 	return complex(float64(v.real), float64(v.imag))
 }
 
+//export InterfaceToPythonObject
+func InterfaceToPythonObject(handle CGoHandle) *C.PyObject {
+	ifr := gopyh.VarFromHandle((gopyh.CGoHandle)(handle), "interface{}")
+	return InterfaceToPython(ifr)
+}
+
+func InterfaceToPython(i interface{}) *C.PyObject {
+	if i == nil {
+		return C.ReturnNone()
+	}
+	if reflect.TypeOf(i).Kind() == reflect.Ptr {
+		i = reflect.ValueOf(i).Elem().Interface()
+	}
+	switch to := i.(type) {
+	case []byte:
+		return C.PyBytes_FromStringAndSize((*C.char)(unsafe.Pointer(&to[0])), C.long(len(to)))
+	case string:
+		cstr := C.CString(to)
+		defer C.free(unsafe.Pointer(cstr))
+		return C.PyUnicode_FromStringAndSize((*C.char)(unsafe.Pointer(cstr)), C.long(len(to)))
+	case bool:
+		if to {
+			return C.ReturnBool(1)
+		} else {
+			return C.ReturnBool(0)
+		}
+	case int8, int16, int32, int64, int:
+		return C.PyLong_FromLongLong(C.longlong(reflect.ValueOf(to).Int()))
+	case uint8, uint16, uint32, uint64, uint:
+		return C.PyLong_FromUnsignedLongLong(C.ulonglong(reflect.ValueOf(to).Uint()))
+	case float32, float64:
+		return C.PyFloat_FromDouble(C.double(reflect.ValueOf(to).Float()))
+	case complex64:
+		return C.PyComplex_FromDoubles(C.double(real(to)), C.double(imag(to)))
+	case complex128:
+		return C.PyComplex_FromDoubles(C.double(real(to)), C.double(imag(to)))
+	case time.Time:
+		return C.GetPyDateTime(C.int(to.Year()), C.int(to.Month()),
+			C.int(to.Day()), C.int(to.Hour()), C.int(to.Minute()), C.int(to.Second()),
+			C.int(to.Nanosecond()/1000))
+	default:
+		println("Can't convert type:" + reflect.TypeOf(i).Name())
+	}
+	return C.ReturnNone()
+}
+
+//export InterfaceSliceToPython
+func InterfaceSliceToPython(handle CGoHandle) *C.PyObject {
+	slice :=	ptrFromHandle_Slice_interface_(handle)
+	if slice == nil {
+		return C.PyList_New(0)
+	}
+  plist := C.PyList_New(C.long(len(*slice)))
+  for i, obj := range *slice {
+		C.PyList_SetItem(plist, C.long(i), InterfaceToPython(obj))
+  }
+  return plist
+}
+
 %[9]s
 `
 
@@ -212,6 +290,8 @@ mod.add_function('GoPyInit', None, [])
 mod.add_function('DecRef', None, [param('int64_t', 'handle')])
 mod.add_function('IncRef', None, [param('int64_t', 'handle')])
 mod.add_function('NumHandles', retval('int'), [])
+mod.add_function('InterfaceSliceToPython', retval('PyObject*', caller_owns_return=True), [param('int64_t', 'handle')])
+mod.add_function('InterfaceToPythonObject', retval('PyObject*', caller_owns_return=True), [param('int64_t', 'handle')])
 `
 
 	// appended to imports in py wrap preamble as key for adding at end
@@ -282,6 +362,14 @@ def Init():
 	"""calls the GoPyInit function, which runs the 'main' code string that was passed using -main arg to gopy"""
 	_%[1]s.GoPyInit()
 
+def InterfaceSliceToPython(goSlice):
+	"""Convert given slice to Python native list"""
+	return _pydb.InterfaceSliceToPython(goSlice.handle)
+
+def InterfaceToPython(goInterface):
+	"""Convert given go interface to Python native list"""
+	return _pydb.InterfaceToPythonObject(goInterface.handle)
+
 	`
 
 	// 3 = gencmd, 4 = vm, 5 = libext 6 = extraGccArgs
@@ -310,7 +398,7 @@ build:
 	# this will otherwise be built during go build and may be out of date
 	- rm %[1]s.c
 	# goimports is needed to ensure that the imports list is valid
-	$(GOIMPORTS) -w %[1]s.go
+	$(GOIMPORTS) -w -local time %[1]s.go
 	# generate %[1]s_go$(LIBEXT) from %[1]s.go -- the cgo wrappers to go functions
 	# $(GOBUILD) -buildmode=c-shared -o %[1]s_go$(LIBEXT) %[1]s.go
 	# we use static linked lib
@@ -547,6 +635,11 @@ func (g *pyGen) genPre() {
 	g.genPyBuildPreamble()
 	g.genMakefile()
 	oinit, err := os.Create(filepath.Join(g.odir, "__init__.py"))
+	if g.lang == 2 {
+		oinit.WriteString("import go\n\ngo.Init()\n")
+	} else {
+		oinit.WriteString("from . import go\n\ngo.Init()\n")
+	}
 	g.err.Add(err)
 	err = oinit.Close()
 	g.err.Add(err)
